@@ -2,7 +2,11 @@ import { bindPool } from '../binders/bindPool';
 import { Logger } from '../Logger';
 import { createTypeOverrides } from '../routines/createTypeOverrides';
 import { poolStateMap } from '../state';
-import { type ClientConfigurationInput, type DatabasePool } from '../types';
+import {
+  type ClientConfigurationInput,
+  type ConnectionOptions,
+  type DatabasePool,
+} from '../types';
 import { createUid } from '../utilities/createUid';
 import { createClientConfiguration } from './createClientConfiguration';
 import { createPoolConfiguration } from './createPoolConfiguration';
@@ -10,11 +14,8 @@ import { Client as PgClient, Pool as PgPool } from 'pg';
 import type pgTypes from 'pg-types';
 import { serializeError } from 'serialize-error';
 
-/**
- * @param connectionUri PostgreSQL [Connection URI](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING).
- */
 export const createPool = async (
-  connectionUri: string,
+  connectionOptions: ConnectionOptions,
   clientConfigurationInput?: ClientConfigurationInput,
 ): Promise<DatabasePool> => {
   const clientConfiguration = createClientConfiguration(
@@ -28,7 +29,7 @@ export const createPool = async (
   });
 
   const poolConfiguration = createPoolConfiguration(
-    connectionUri,
+    connectionOptions,
     clientConfiguration,
   );
 

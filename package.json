@@ -66,7 +66,7 @@
   ],
   "license": "BSD-3-Clause",
   "main": "./dist/index.js",
-  "name": "@dil-kpakozdi/slonik",
+  "name": "@diligentcorp/slonik",
   "nyc": {
     "all": true,
     "exclude": [
@@ -101,5 +101,5 @@
     "test": "nyc ava --verbose --serial"
   },
   "types": "./dist/index.d.ts",
-  "version": "0.0.0-development"
+  "version": "0.0.1"
 }

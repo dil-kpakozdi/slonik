@@ -1,8 +1,10 @@
 import { TRANSACTION_ROLLBACK_ERROR_PREFIX } from '../constants';
 import {
   BackendTerminatedError,
+  BackendTerminatedUnexpectedlyError,
   CheckIntegrityConstraintViolationError,
   ForeignKeyIntegrityConstraintViolationError,
+  InputSyntaxError,
   InvalidInputError,
   NotNullIntegrityConstraintViolationError,
   StatementCancelledError,
@@ -24,16 +26,17 @@ import {
   type QueryResult,
   type QueryResultRow,
   type QuerySqlToken,
+  type StreamResult,
 } from '../types';
 import { createQueryId } from '../utilities/createQueryId';
 import { defer } from '../utilities/defer';
-import { getStackTrace } from '../utilities/getStackTrace';
+import { getStackTrace } from 'get-stack-trace';
 import { type PoolClient as PgPoolClient } from 'pg';
 import { serializeError } from 'serialize-error';
 
-type GenericQueryResult = QueryResult<QueryResultRow>;
+type GenericQueryResult = StreamResult | QueryResult<QueryResultRow>;
 
-type ExecutionRoutineType = (
+export type ExecutionRoutine = (
   connection: PgPoolClient,
   sql: string,
   values: readonly PrimitiveValueExpression[],
@@ -43,7 +46,7 @@ type ExecutionRoutineType = (
 
 type TransactionQuery = {
   readonly executionContext: QueryContext;
-  readonly executionRoutine: ExecutionRoutineType;
+  readonly executionRoutine: ExecutionRoutine;
   readonly sql: string;
   readonly values: readonly PrimitiveValueExpression[];
 };
@@ -120,8 +123,11 @@ export const executeQuery = async (
   clientConfiguration: ClientConfiguration,
   query: QuerySqlToken,
   inheritedQueryId: QueryId | undefined,
-  executionRoutine: ExecutionRoutineType,
-): Promise<QueryResult<Record<string, PrimitiveValueExpression>>> => {
+  executionRoutine: ExecutionRoutine,
+  stream: boolean,
+): Promise<
+  StreamResult | QueryResult<Record<string, PrimitiveValueExpression>>
+> => {
   const poolClientState = getPoolClientState(connection);
 
   if (poolClientState.terminated) {
@@ -188,19 +194,21 @@ export const executeQuery = async (
 
   let result: GenericQueryResult | null;
 
-  for (const interceptor of clientConfiguration.interceptors) {
-    if (interceptor.beforeQueryExecution) {
-      result = await interceptor.beforeQueryExecution(
-        executionContext,
-        actualQuery,
-      );
-
-      if (result) {
-        log.info(
-          'beforeQueryExecution interceptor produced a result; short-circuiting query execution using beforeQueryExecution result',
+  if (!stream) {
+    for (const interceptor of clientConfiguration.interceptors) {
+      if (interceptor.beforeQueryExecution) {
+        result = await interceptor.beforeQueryExecution(
+          executionContext,
+          actualQuery,
         );
 
-        return result;
+        if (result) {
+          log.info(
+            'beforeQueryExecution interceptor produced a result; short-circuiting query execution using beforeQueryExecution result',
+          );
+
+          return result;
+        }
       }
     }
   }
@@ -263,6 +271,9 @@ export const executeQuery = async (
         },
         'execution routine produced an error',
       );
+      if (error.message === 'Connection terminated unexpectedly') {
+        throw new BackendTerminatedUnexpectedlyError(error);
+      }
 
       // 'Connection terminated' refers to node-postgres error.
       // @see https://github.com/brianc/node-postgres/blob/eb076db5d47a29c19d3212feac26cd7b6d257a95/lib/client.js#L199
@@ -295,31 +306,23 @@ export const executeQuery = async (
       }
 
       if (error.code === '23502') {
-        throw new NotNullIntegrityConstraintViolationError(
-          error,
-          error.constraint,
-        );
+        throw new NotNullIntegrityConstraintViolationError(error);
       }
 
       if (error.code === '23503') {
-        throw new ForeignKeyIntegrityConstraintViolationError(
-          error,
-          error.constraint,
-        );
+        throw new ForeignKeyIntegrityConstraintViolationError(error);
       }
 
       if (error.code === '23505') {
-        throw new UniqueIntegrityConstraintViolationError(
-          error,
-          error.constraint,
-        );
+        throw new UniqueIntegrityConstraintViolationError(error);
       }
 
       if (error.code === '23514') {
-        throw new CheckIntegrityConstraintViolationError(
-          error,
-          error.constraint,
-        );
+        throw new CheckIntegrityConstraintViolationError(error);
+      }
+
+      if (error.code === '42601') {
+        throw new InputSyntaxError(error, actualQuery);
       }
 
       error.notices = notices;
@@ -347,24 +350,23 @@ export const executeQuery = async (
   }
 
   if (!result) {
-    throw new UnexpectedStateError();
+    throw new UnexpectedStateError('Expected query result to be returned.');
   }
 
   // @ts-expect-error -- We want to keep notices as readonly for consumer, but write to it here.
   result.notices = notices;
 
-  for (const interceptor of clientConfiguration.interceptors) {
-    if (interceptor.afterQueryExecution) {
-      await interceptor.afterQueryExecution(
-        executionContext,
-        actualQuery,
-        result,
-      );
+  if (result.type === 'QueryResult') {
+    for (const interceptor of clientConfiguration.interceptors) {
+      if (interceptor.afterQueryExecution) {
+        await interceptor.afterQueryExecution(
+          executionContext,
+          actualQuery,
+          result,
+        );
+      }
     }
-  }
 
-  // Stream does not have `rows` in the result object and all rows are already transformed.
-  if (result.rows) {
     const interceptors: Interceptor[] =
       clientConfiguration.interceptors.slice();
 
@@ -385,15 +387,15 @@ export const executeQuery = async (
         };
       }
     }
-  }
 
-  for (const interceptor of clientConfiguration.interceptors) {
-    if (interceptor.beforeQueryResult) {
-      await interceptor.beforeQueryResult(
-        executionContext,
-        actualQuery,
-        result,
-      );
+    for (const interceptor of clientConfiguration.interceptors) {
+      if (interceptor.beforeQueryResult) {
+        await interceptor.beforeQueryResult(
+          executionContext,
+          actualQuery,
+          result,
+        );
+      }
     }
   }
 

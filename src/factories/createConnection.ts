@@ -1,6 +1,7 @@
 import { bindPoolConnection } from '../binders/bindPoolConnection';
-import { ConnectionError, UnexpectedStateError } from '../errors';
-import { getPoolClientState, getPoolState, poolClientStateMap } from '../state';
+import { UnexpectedStateError } from '../errors';
+import { establishConnection } from '../routines/establishConnection';
+import { getPoolClientState, getPoolState } from '../state';
 import {
   type ClientConfiguration,
   type Connection,
@@ -10,17 +11,14 @@ import {
   type MaybePromise,
   type QuerySqlToken,
 } from '../types';
-import { createUid } from '../utilities/createUid';
 import { type Pool as PgPool, type PoolClient as PgPoolClient } from 'pg';
-import { serializeError } from 'serialize-error';
 
 type ConnectionHandlerType = (
   connectionLog: Logger,
   connection: PgPoolClient,
   boundConnection: DatabasePoolConnection,
   clientConfiguration: ClientConfiguration,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-) => MaybePromise<any>;
+) => MaybePromise<unknown>;
 
 type PoolHandlerType = (pool: DatabasePool) => Promise<unknown>;
 
@@ -61,9 +59,9 @@ export const createConnection = async (
   poolHandler: PoolHandlerType,
   query: QuerySqlToken | null = null,
 ) => {
-  const poolState = getPoolState(pool);
+  const { ended, poolId } = getPoolState(pool);
 
-  if (poolState.ended) {
+  if (ended) {
     throw new UnexpectedStateError(
       'Connection pool shutdown has been already initiated. Cannot create a new connection.',
     );
@@ -73,7 +71,7 @@ export const createConnection = async (
     if (interceptor.beforePoolConnection) {
       const maybeNewPool = await interceptor.beforePoolConnection({
         log: parentLog,
-        poolId: poolState.poolId,
+        poolId,
         query,
       });
 
@@ -83,53 +81,13 @@ export const createConnection = async (
     }
   }
 
-  let connection: PgPoolClient;
+  const connection = await establishConnection(
+    parentLog,
+    pool,
+    clientConfiguration.connectionRetryLimit,
+  );
 
-  let remainingConnectionRetryLimit = clientConfiguration.connectionRetryLimit;
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    remainingConnectionRetryLimit--;
-
-    try {
-      connection = await pool.connect();
-
-      poolClientStateMap.set(connection, {
-        connectionId: createUid(),
-        mock: poolState.mock,
-        poolId: poolState.poolId,
-        terminated: null,
-        transactionDepth: null,
-        transactionId: null,
-      });
-
-      break;
-    } catch (error) {
-      parentLog.error(
-        {
-          error: serializeError(error),
-          remainingConnectionRetryLimit,
-        },
-        'cannot establish connection',
-      );
-
-      if (remainingConnectionRetryLimit > 1) {
-        parentLog.info('retrying connection');
-
-        continue;
-      } else {
-        throw new ConnectionError(error.message);
-      }
-    }
-  }
-
-  if (!connection) {
-    throw new UnexpectedStateError('Connection handle is not present.');
-  }
-
-  const poolClientState = getPoolClientState(connection);
-
-  const { connectionId } = poolClientState;
+  const { connectionId } = getPoolClientState(connection);
 
   const connectionLog = parentLog.child({
     connectionId,
@@ -139,7 +97,7 @@ export const createConnection = async (
     connectionId,
     connectionType,
     log: connectionLog,
-    poolId: poolState.poolId,
+    poolId,
   };
 
   const boundConnection = bindPoolConnection(

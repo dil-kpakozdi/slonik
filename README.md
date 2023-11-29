@@ -2,8 +2,6 @@
 <a name="slonik"></a>
 # Slonik
 
-[![Travis build status](http://img.shields.io/travis/gajus/slonik/master.svg?style=flat-square)](https://travis-ci.com/github/gajus/slonik)
-[![Coveralls](https://img.shields.io/coveralls/gajus/slonik.svg?style=flat-square)](https://coveralls.io/github/gajus/slonik)
 [![NPM version](http://img.shields.io/npm/v/slonik.svg?style=flat-square)](https://www.npmjs.org/package/slonik)
 [![Canonical Code Style](https://img.shields.io/badge/code%20style-canonical-blue.svg?style=flat-square)](https://github.com/gajus/canonical)
 [![Twitter Follow](https://img.shields.io/twitter/follow/kuizinas.svg?style=social&label=Follow)](https://twitter.com/kuizinas)
@@ -454,6 +452,13 @@ postgresql://foo:bar@localhost
 postgresql://foo@localhost/bar?application_name=baz
 ```
 
+Unix-domain socket connection is chosen if the host part is either empty or looks like an absolute path name.
+
+```text
+postgresql:///dbname?host=/var/lib/postgresql
+postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
+```
+
 Other configurations are available through the [`clientConfiguration` parameter](https://github.com/gajus/slonik#api).
 
 <a name="user-content-slonik-usage-create-connection"></a>
@@ -469,6 +474,8 @@ import {
 
 const pool = await createPool('postgres://');
 ```
+
+> **Note:** If you are new to Slonik, then you should read [Integrating Slonik with Express.js](https://dev.to/gajus/integrating-slonik-with-expressjs-33kn).
 
 Instance of Slonik connection pool can be then used to create a new connection, e.g.
 
@@ -1190,7 +1197,7 @@ const pool = await createPool('postgres://main', {
         // This is a convention for the edge-cases where a SELECT query includes a volatile function.
         // Adding a @volatile comment anywhere into the query bypasses the read-only route, e.g.
         // sql.unsafe`
-        //   # @volatile
+        //   /* @volatile */
         //   SELECT write_log()
         // `
         if (connectionContext.query?.sql.includes('@volatile')) {
@@ -1343,7 +1350,7 @@ import {
 } from 'slonik';
 try {
 } catch (error) {
-  if (error extends SchemaValidationError) {
+  if (error instanceof SchemaValidationError) {
     // Handle scheme validation error
   }
 }
@@ -2463,24 +2470,43 @@ Example:
 
 ```ts
 await connection.stream(sql.typeAlias('foo')`SELECT foo`, (stream) => {
-  stream.on('data', (datum) => {
-    datum;
+  stream.on('data', (row) => {
+    row;
     // {
+    //   data: {
+    //     foo: 'bar'
+    //   },
     //   fields: [
     //     {
     //       name: 'foo',
     //       dataTypeId: 23,
     //     }
-    //   ],
-    //   row: {
-    //     foo: 'bar'
-    //   }
+    //   ]
     // }
   });
 });
 ```
 
-Note: Implemented using [`pg-query-stream`](https://github.com/brianc/node-pg-query-stream).
+You can also using the [AsyncIterable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AsyncIterator) interface:
+
+```ts
+await connection.stream(sql.typeAlias('foo')`SELECT foo`, async (stream) => {
+  for await (const row of stream) {
+    row;
+    // {
+    //   data: {
+    //     foo: 'bar'
+    //   },
+    //   fields: [
+    //     {
+    //       name: 'foo',
+    //       dataTypeId: 23,
+    //     }
+    //   ]
+    // }
+  }
+});
+```
 
 <a name="user-content-slonik-query-methods-transaction"></a>
 <a name="slonik-query-methods-transaction"></a>
@@ -2685,7 +2711,7 @@ try {
 <a name="slonik-error-handling-original-node-postgres-error"></a>
 ### Original <code>node-postgres</code> error
 
-When error originates from `node-postgres`, the original error is available under `originalError` property.
+When error originates from `node-postgres`, the original error is available under [`cause` property](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/cause).
 
 This property is exposed for debugging purposes only. Do not use it for conditional checks – it can change.
 
@@ -3016,5 +3042,5 @@ Running Slonik tests requires having a local PostgreSQL instance.
 The easiest way to setup a temporary instance for testing is using Docker, e.g.
 
 ```bash
-docker run --rm -it -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 postgres
+docker run --name slonik-test --rm -it -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 postgres -N 1000
 ```

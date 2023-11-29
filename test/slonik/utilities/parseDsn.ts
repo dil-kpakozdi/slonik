@@ -38,12 +38,27 @@ test('postgresql://fo%2Fo:b%2Far@localhost/ba%2Fz', testParse, {
   username: 'fo/o',
 });
 test(
-  'postgresql://db_user:db_password@%2Fcloudsql%2Fproject-id%3Aregion-id1%3Acloudsqlinstance-name/dbname',
+  // cspell: disable-next-line
+  'postgresql://db_user:db_password@%2Fcloudsql%2Fproject-id%3Aregion-id1%3Acloudsqlinstance-name/database-name',
   testParse,
   {
-    databaseName: 'dbname',
+    databaseName: 'database-name',
     host: '/cloudsql/project-id:region-id1:cloudsqlinstance-name',
     password: 'db_password',
     username: 'db_user',
   },
 );
+
+// https://github.com/gajus/slonik/issues/468#issuecomment-1736020990
+// cspell: disable-next-line
+test('postgresql://%2Fvar%2Flib%2Fpostgresql/database-name', testParse, {
+  databaseName: 'database-name',
+  host: '/var/lib/postgresql',
+});
+
+// https://github.com/gajus/slonik/issues/468#issuecomment-1736020990
+// cspell: disable-next-line
+test('postgresql:///database-name?host=/var/lib/postgresql', testParse, {
+  databaseName: 'database-name',
+  host: '/var/lib/postgresql',
+});

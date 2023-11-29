@@ -172,24 +172,43 @@ Example:
 
 ```ts
 await connection.stream(sql.typeAlias('foo')`SELECT foo`, (stream) => {
-  stream.on('data', (datum) => {
-    datum;
+  stream.on('data', (row) => {
+    row;
     // {
+    //   data: {
+    //     foo: 'bar'
+    //   },
     //   fields: [
     //     {
     //       name: 'foo',
     //       dataTypeId: 23,
     //     }
-    //   ],
-    //   row: {
-    //     foo: 'bar'
-    //   }
+    //   ]
     // }
   });
 });
 ```
 
-Note: Implemented using [`pg-query-stream`](https://github.com/brianc/node-pg-query-stream).
+You can also using the [AsyncIterable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AsyncIterator) interface:
+
+```ts
+await connection.stream(sql.typeAlias('foo')`SELECT foo`, async (stream) => {
+  for await (const row of stream) {
+    row;
+    // {
+    //   data: {
+    //     foo: 'bar'
+    //   },
+    //   fields: [
+    //     {
+    //       name: 'foo',
+    //       dataTypeId: 23,
+    //     }
+    //   ]
+    // }
+  }
+});
+```
 
 ### `transaction`
 

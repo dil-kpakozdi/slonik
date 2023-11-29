@@ -4,10 +4,12 @@ export const sql = createSqlTag();
 
 export {
   BackendTerminatedError,
+  BackendTerminatedUnexpectedlyError,
   CheckIntegrityConstraintViolationError,
   ConnectionError,
   DataIntegrityError,
   ForeignKeyIntegrityConstraintViolationError,
+  InputSyntaxError,
   IntegrityConstraintViolationError,
   InvalidConfigurationError,
   InvalidInputError,

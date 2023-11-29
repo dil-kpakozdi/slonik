@@ -1,18 +1,17 @@
 import { bindPool } from '../binders/bindPool';
 import { Logger } from '../Logger';
 import { createTypeOverrides } from '../routines/createTypeOverrides';
-import { poolStateMap } from '../state';
+import { getPoolState } from '../state';
 import {
   type ClientConfigurationInput,
   type ConnectionOptions,
   type DatabasePool,
 } from '../types';
-import { createUid } from '../utilities/createUid';
 import { createClientConfiguration } from './createClientConfiguration';
+import { createInternalPool } from './createInternalPool';
 import { createPoolConfiguration } from './createPoolConfiguration';
-import { Client as PgClient, Pool as PgPool } from 'pg';
+import { Pool as PgPool } from 'pg';
 import type pgTypes from 'pg-types';
-import { serializeError } from 'serialize-error';
 
 export const createPool = async (
   connectionOptions: ConnectionOptions,
@@ -21,12 +20,6 @@ export const createPool = async (
   const clientConfiguration = createClientConfiguration(
     clientConfigurationInput,
   );
-
-  const poolId = createUid();
-
-  const poolLog = Logger.child({
-    poolId,
-  });
 
   const poolConfiguration = createPoolConfiguration(
     connectionOptions,
@@ -43,103 +36,35 @@ export const createPool = async (
     throw new Error('Unexpected state.');
   }
 
-  const setupClient = new PgClient({
-    connectionTimeoutMillis: poolConfiguration.connectionTimeoutMillis,
-    database: poolConfiguration.database,
-    host: poolConfiguration.host,
-    password: poolConfiguration.password,
-    port: poolConfiguration.port,
-    ssl: poolConfiguration.ssl,
-    user: poolConfiguration.user,
-  });
+  const setupPool = createInternalPool(Pool, poolConfiguration);
 
   let getTypeParser: typeof pgTypes.getTypeParser;
+
   try {
-    await setupClient.connect();
+    const connection = await setupPool.connect();
+
     getTypeParser = await createTypeOverrides(
-      setupClient,
+      connection,
       clientConfiguration.typeParsers,
     );
+
+    await connection.release();
   } finally {
-    await setupClient.end();
+    await setupPool.end();
   }
 
-  const pool: PgPool = new Pool({
+  const pool = createInternalPool(Pool, {
     ...poolConfiguration,
     types: {
       getTypeParser,
     },
   });
 
-  poolStateMap.set(pool, {
-    ended: false,
-    mock: false,
-    poolId,
-    typeOverrides: null,
-  });
-
-  // istanbul ignore next
-  pool.on('connect', (client) => {
-    client.on('error', (error) => {
-      poolLog.error(
-        {
-          error: serializeError(error),
-        },
-        'client error',
-      );
-    });
-
-    client.on('notice', (notice) => {
-      poolLog.info(
-        {
-          notice: {
-            level: notice.name,
-            message: notice.message,
-          },
-        },
-        'notice message',
-      );
-    });
-
-    poolLog.debug(
-      {
-        stats: {
-          idleConnectionCount: pool.idleCount,
-          totalConnectionCount: pool.totalCount,
-          waitingRequestCount: pool.waitingCount,
-        },
-      },
-      'created a new client connection',
-    );
-  });
-
-  // istanbul ignore next
-  pool.on('acquire', () => {
-    poolLog.debug(
-      {
-        stats: {
-          idleConnectionCount: pool.idleCount,
-          totalConnectionCount: pool.totalCount,
-          waitingRequestCount: pool.waitingCount,
-        },
-      },
-      'client is checked out from the pool',
-    );
-  });
-
-  // istanbul ignore next
-  pool.on('remove', () => {
-    poolLog.debug(
-      {
-        stats: {
-          idleConnectionCount: pool.idleCount,
-          totalConnectionCount: pool.totalCount,
-          waitingRequestCount: pool.waitingCount,
-        },
-      },
-      'client connection is closed and removed from the client pool',
-    );
-  });
-
-  return bindPool(poolLog, pool, clientConfiguration);
+  return bindPool(
+    Logger.child({
+      poolId: getPoolState(pool).poolId,
+    }),
+    pool,
+    clientConfiguration,
+  );
 };

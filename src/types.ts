@@ -57,7 +57,19 @@ export type QueryId = string;
 
 export type MaybePromise<T> = Promise<T> | T;
 
-export type StreamHandler = (stream: Readable) => void;
+type StreamDataEvent<T> = { data: T; fields: readonly Field[] };
+
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+interface TypedReadable<T> extends Readable {
+  // eslint-disable-next-line @typescript-eslint/method-signature-style
+  on(event: 'data', listener: (chunk: StreamDataEvent<T>) => void): this;
+  // eslint-disable-next-line @typescript-eslint/method-signature-style
+  on(event: string | symbol, listener: (...args: any[]) => void): this;
+
+  [Symbol.asyncIterator]: () => AsyncIterableIterator<StreamDataEvent<T>>;
+}
+
+export type StreamHandler<T> = (stream: TypedReadable<T>) => void;
 
 export type Connection = 'EXPLICIT' | 'IMPLICIT_QUERY' | 'IMPLICIT_TRANSACTION';
 
@@ -72,6 +84,7 @@ export type QueryResult<T> = {
   readonly notices: readonly Notice[];
   readonly rowCount: number;
   readonly rows: readonly T[];
+  readonly type: 'QueryResult';
 };
 
 export type ClientConfiguration = {
@@ -133,11 +146,16 @@ export type ClientConfigurationInput = Partial<ClientConfiguration>;
 
 export type QueryStreamConfig = ReadableOptions & { batchSize?: number };
 
-export type StreamFunction = (
-  sql: QuerySqlToken,
-  streamHandler: StreamHandler,
+export type StreamResult = {
+  notices: readonly Notice[];
+  type: 'StreamResult';
+};
+
+type StreamFunction = <T extends ZodTypeAny>(
+  sql: QuerySqlToken<T>,
+  streamHandler: StreamHandler<z.infer<T>>,
   config?: QueryStreamConfig,
-) => Promise<Record<string, unknown> | null>;
+) => Promise<StreamResult>;
 
 export type CommonQueryMethods = {
   readonly any: QueryAnyFunction;
@@ -160,7 +178,7 @@ export type DatabaseTransactionConnection = CommonQueryMethods & {
   readonly stream: StreamFunction;
 };
 
-export type TransactionFunction<T> = (
+type TransactionFunction<T> = (
   connection: DatabaseTransactionConnection,
 ) => Promise<T>;
 
@@ -172,7 +190,7 @@ export type ConnectionRoutine<T> = (
   connection: DatabasePoolConnection,
 ) => Promise<T>;
 
-export type PoolState = {
+type PoolState = {
   readonly activeConnectionCount: number;
   readonly ended: boolean;
   readonly idleConnectionCount: number;
@@ -227,7 +245,7 @@ export type PoolContext = {
  * @property log Instance of Roarr logger with bound connection context parameters.
  * @property poolId Unique connection pool ID.
  */
-export type ConnectionContext = {
+type ConnectionContext = {
   readonly connectionId: string;
   readonly connectionType: Connection;
   readonly log: Logger;
@@ -345,6 +363,7 @@ export type UnnestSqlToken = {
 
 export type PrimitiveValueExpression =
   | Buffer
+  | bigint
   | boolean
   | number
   | string
@@ -366,10 +385,6 @@ export type SqlToken =
   | UnnestSqlToken;
 
 export type ValueExpression = PrimitiveValueExpression | SqlFragment | SqlToken;
-
-export type NamedAssignment = {
-  readonly [key: string]: ValueExpression;
-};
 
 export type SqlTag<Z extends Record<string, ZodTypeAny>> = {
   array: (
@@ -429,15 +444,15 @@ export type InternalQueryMethod<R = any> = (
   uid?: QueryId,
 ) => R;
 
-export type InternalStreamFunction = (
+export type InternalStreamFunction = <T>(
   log: Logger,
   connection: PgPoolClient,
   clientConfiguration: ClientConfiguration,
   slonikSql: QuerySqlToken,
-  streamHandler: StreamHandler,
+  streamHandler: StreamHandler<T>,
   uid?: QueryId,
   config?: QueryStreamConfig,
-) => Promise<Record<string, unknown>>;
+) => Promise<StreamResult>;
 
 export type InternalTransactionFunction = <T>(
   log: Logger,
@@ -456,15 +471,15 @@ export type InternalNestedTransactionFunction = <T>(
   transactionRetryLimit?: number,
 ) => Promise<T>;
 
-export type QueryAnyFirstFunction = <T extends ZodTypeAny>(
+type QueryAnyFirstFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<ReadonlyArray<z.infer<T>[keyof z.infer<T>]>>;
-export type QueryAnyFunction = <T extends ZodTypeAny>(
+type QueryAnyFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<ReadonlyArray<z.infer<T>>>;
-export type QueryExistsFunction = <T extends ZodTypeAny>(
+type QueryExistsFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<boolean>;
@@ -472,27 +487,27 @@ export type QueryFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<QueryResult<z.infer<T>>>;
-export type QueryManyFirstFunction = <T extends ZodTypeAny>(
+type QueryManyFirstFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<ReadonlyArray<z.infer<T>[keyof z.infer<T>]>>;
-export type QueryManyFunction = <T extends ZodTypeAny>(
+type QueryManyFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<ReadonlyArray<z.infer<T>>>;
-export type QueryMaybeOneFirstFunction = <T extends ZodTypeAny>(
+type QueryMaybeOneFirstFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<z.infer<T>[keyof z.infer<T>] | null>;
-export type QueryMaybeOneFunction = <T extends ZodTypeAny>(
+type QueryMaybeOneFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<z.infer<T> | null>;
-export type QueryOneFirstFunction = <T extends ZodTypeAny>(
+type QueryOneFirstFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<z.infer<T>[keyof z.infer<T>]>;
-export type QueryOneFunction = <T extends ZodTypeAny>(
+type QueryOneFunction = <T extends ZodTypeAny>(
   sql: QuerySqlToken<T>,
   values?: PrimitiveValueExpression[],
 ) => Promise<z.infer<T>>;

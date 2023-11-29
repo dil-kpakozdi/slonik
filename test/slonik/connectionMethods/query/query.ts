@@ -12,6 +12,15 @@ import test from 'ava';
 import delay from 'delay';
 import * as sinon from 'sinon';
 
+export const createErrorWithCodeAndConstraint = (code: string) => {
+  const error = createErrorWithCode(code);
+
+  // @ts-expect-error
+  error.constraint = 'foo';
+
+  return error;
+};
+
 const sql = createSqlTag();
 
 test('ends connection after promise is resolved (explicit connection)', async (t) => {
@@ -53,6 +62,7 @@ test('executes the query and returns the result', async (t) => {
         foo: 1,
       },
     ],
+    type: 'QueryResult',
   });
 
   const result = await pool.query(sql.unsafe`SELECT 1`);
@@ -67,6 +77,7 @@ test('executes the query and returns the result', async (t) => {
         foo: 1,
       },
     ],
+    type: 'QueryResult',
   });
 });
 
@@ -105,6 +116,7 @@ test('adds notices observed during the query execution to the query result objec
         foo: 1,
       },
     ],
+    type: 'QueryResult',
   });
 
   await delay(100);
@@ -121,13 +133,14 @@ test('adds notices observed during the query execution to the query result objec
         foo: 1,
       },
     ],
+    type: 'QueryResult',
   });
 });
 
 test('maps 23514 error code to CheckIntegrityConstraintViolationError', async (t) => {
   const pool = await createPool();
 
-  pool.querySpy.rejects(createErrorWithCode('23514'));
+  pool.querySpy.rejects(createErrorWithCodeAndConstraint('23514'));
 
   const error = await t.throwsAsync(pool.query(sql.unsafe`SELECT 1`));
 
@@ -137,7 +150,7 @@ test('maps 23514 error code to CheckIntegrityConstraintViolationError', async (t
 test('maps 23503 error code to ForeignKeyIntegrityConstraintViolationError', async (t) => {
   const pool = await createPool();
 
-  pool.querySpy.rejects(createErrorWithCode('23503'));
+  pool.querySpy.rejects(createErrorWithCodeAndConstraint('23503'));
 
   const error = await t.throwsAsync(pool.query(sql.unsafe`SELECT 1`));
 
@@ -147,7 +160,7 @@ test('maps 23503 error code to ForeignKeyIntegrityConstraintViolationError', asy
 test('maps 23502 error code to NotNullIntegrityConstraintViolationError', async (t) => {
   const pool = await createPool();
 
-  pool.querySpy.rejects(createErrorWithCode('23502'));
+  pool.querySpy.rejects(createErrorWithCodeAndConstraint('23502'));
 
   const error = await t.throwsAsync(pool.query(sql.unsafe`SELECT 1`));
 
@@ -157,7 +170,7 @@ test('maps 23502 error code to NotNullIntegrityConstraintViolationError', async 
 test('maps 23505 error code to UniqueIntegrityConstraintViolationError', async (t) => {
   const pool = await createPool();
 
-  pool.querySpy.rejects(createErrorWithCode('23505'));
+  pool.querySpy.rejects(createErrorWithCodeAndConstraint('23505'));
 
   const error = await t.throwsAsync(pool.query(sql.unsafe`SELECT 1`));
 

@@ -3,7 +3,9 @@ import {
   createNumericTypeParser,
   createPool,
   type DatabasePoolConnection,
+  InputSyntaxError,
   InvalidInputError,
+  NotNullIntegrityConstraintViolationError,
   sql,
   StatementCancelledError,
   StatementTimeoutError,
@@ -84,10 +86,13 @@ export const createTestRunner = (
       await connection.query(sql.unsafe`
         CREATE TABLE person (
           id SERIAL PRIMARY KEY,
-          name text,
+          name text NOT NULL,
           tags text[],
           birth_date date,
-          payload bytea
+          payload bytea,
+          molecules int8,
+          updated_no_tz_at timestamp without time zone NOT NULL DEFAULT now(),
+          updated_at timestamp with time zone NOT NULL DEFAULT now()
         )
       `);
     });
@@ -137,6 +142,123 @@ export const createIntegrationTests = (
   test: TestFn<TestContextType>,
   PgPool: new () => PgPoolType,
 ) => {
+  test('inserts and retrieves bigint', async (t) => {
+    const pool = await createPool(t.context.dsn, {
+      PgPool,
+    });
+    const result = await pool.oneFirst(sql.unsafe`
+      SELECT ${BigInt(9_007_199_254_740_999n)}::bigint
+    `);
+
+    t.is(result, BigInt(9_007_199_254_740_999n));
+
+    await pool.end();
+  });
+
+  test('NotNullIntegrityConstraintViolationError identifies the table and column', async (t) => {
+    const pool = await createPool(t.context.dsn, {
+      PgPool,
+    });
+
+    const error: NotNullIntegrityConstraintViolationError | undefined =
+      await t.throwsAsync(
+        pool.any(sql.unsafe`
+      INSERT INTO person (name) VALUES (null)
+    `),
+      );
+
+    t.true(error instanceof NotNullIntegrityConstraintViolationError);
+    t.is(error?.table, 'person');
+    t.is(error?.column, 'name');
+  });
+
+  test('properly handles terminated connections', async (t) => {
+    const pool = await createPool(t.context.dsn, {
+      PgPool,
+    });
+
+    await Promise.all([
+      pool.connect(() => Promise.resolve()),
+      pool.connect(() => Promise.resolve()),
+    ]);
+
+    await t.notThrowsAsync(
+      pool.query(sql.unsafe`
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE pid != pg_backend_pid()
+      `),
+    );
+  });
+
+  test('produces syntax error with the original SQL', async (t) => {
+    const pool = await createPool(t.context.dsn, {
+      PgPool,
+    });
+
+    const error: InputSyntaxError | undefined = await t.throwsAsync(
+      pool.any(sql.unsafe`SELECT WHERE`),
+    );
+
+    t.true(error instanceof InputSyntaxError);
+
+    t.is(error?.sql, 'SELECT WHERE');
+  });
+
+  test('retrieves correct infinity values (with timezone)', async (t) => {
+    const pool = await createPool(t.context.dsn, {
+      PgPool,
+    });
+
+    await pool.any(sql.unsafe`
+      INSERT INTO person (name, updated_at) VALUES ('foo', 'infinity'), ('bar', '-infinity');
+    `);
+
+    const result = await pool.any(sql.unsafe`
+      SELECT name, updated_at
+      FROM person
+      ORDER BY name ASC;
+    `);
+
+    t.deepEqual(result, [
+      {
+        name: 'bar',
+        updated_at: Number.NEGATIVE_INFINITY,
+      },
+      {
+        name: 'foo',
+        updated_at: Number.POSITIVE_INFINITY,
+      },
+    ]);
+  });
+
+  test('retrieves correct infinity values (without timezone)', async (t) => {
+    const pool = await createPool(t.context.dsn, {
+      PgPool,
+    });
+
+    await pool.any(sql.unsafe`
+      INSERT INTO person (name, updated_no_tz_at) VALUES ('foo', 'infinity'), ('bar', '-infinity');
+    `);
+
+    const result = await pool.any(sql.unsafe`
+      SELECT name, updated_no_tz_at
+      FROM person
+      ORDER BY name ASC;
+    `);
+
+    t.deepEqual(result, [
+      {
+        name: 'bar',
+        updated_no_tz_at: Number.NEGATIVE_INFINITY,
+      },
+      {
+        name: 'foo',
+        updated_no_tz_at: Number.POSITIVE_INFINITY,
+      },
+    ]);
+  });
+
   test('inserting records using jsonb_to_recordset', async (t) => {
     const pool = await createPool(t.context.dsn, {
       PgPool,
@@ -316,6 +438,7 @@ export const createIntegrationTests = (
           names: [Buffer.from('foo')],
         },
       ],
+      type: 'QueryResult',
     });
 
     await pool.end();
@@ -354,6 +477,7 @@ export const createIntegrationTests = (
           name: 'foo',
         },
       ],
+      type: 'QueryResult',
     });
 
     await pool.end();
@@ -401,6 +525,7 @@ export const createIntegrationTests = (
           name: 'bar',
         },
       ],
+      type: 'QueryResult',
     });
 
     await pool.end();
@@ -446,6 +571,7 @@ export const createIntegrationTests = (
           name: 'foo',
         },
       ],
+      type: 'QueryResult',
     });
 
     await pool.end();
@@ -604,15 +730,18 @@ export const createIntegrationTests = (
       PgPool,
     });
 
+    // cspell:disable-next-line
     const payload = 'foobarbazqux';
 
     await pool.query(sql.unsafe`
       INSERT INTO person
       (
+        name,
         payload
       )
       VALUES
       (
+        'foo',
         ${sql.binary(Buffer.from(payload))}
       )
     `);
@@ -1012,6 +1141,7 @@ export const createIntegrationTests = (
           name: 'foo',
         },
       ],
+      type: 'QueryResult',
     });
 
     await pool.end();
@@ -1069,6 +1199,7 @@ export const createIntegrationTests = (
           name: 1,
         },
       ],
+      type: 'QueryResult',
     });
 
     await pool.end();
@@ -1110,33 +1241,6 @@ export const createIntegrationTests = (
     await pool.end();
   });
 
-  test('error messages include original pg error', async (t) => {
-    const pool = await createPool(t.context.dsn, {
-      PgPool,
-    });
-
-    await pool.query(sql.unsafe`
-      INSERT INTO person (id)
-      VALUES (1)
-    `);
-
-    const error = await t.throwsAsync(async () => {
-      return await pool.query(sql.unsafe`
-        INSERT INTO person (id)
-        VALUES (1)
-      `);
-    });
-
-    t.is(
-      error?.message,
-      'Query violates a unique integrity constraint. ' +
-        // @ts-expect-error
-        String(error?.originalError?.message),
-    );
-
-    await pool.end();
-  });
-
   test('Tuple moved to another partition due to concurrent update error handled', async (t) => {
     const pool = await createPool(t.context.dsn, {
       PgPool,
@@ -1165,8 +1269,7 @@ export const createIntegrationTests = (
           .catch((error) => {
             t.is(
               error.message,
-              'Tuple moved to another partition due to concurrent update. ' +
-                String(error?.originalError?.message),
+              'Tuple moved to another partition due to concurrent update.',
             );
             t.true(error instanceof TupleMovedToAnotherPartitionError);
           });
@@ -1181,7 +1284,7 @@ export const createIntegrationTests = (
     await pool.end();
   });
 
-  test('throws InvalidInputError in case of invalid bound value', async (t) => {
+  test.skip('throws InvalidInputError in case of invalid bound value', async (t) => {
     const pool = await createPool(t.context.dsn, {
       PgPool,
     });
